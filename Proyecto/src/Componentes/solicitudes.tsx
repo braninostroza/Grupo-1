@@ -1,291 +1,345 @@
-import React, { useState } from 'react';
-import { collection, addDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes } from 'firebase/storage';
-import { db } from '../firebase/firebaseConfig';
-import './solicitudes.css';
-import Modal from './modal';
+import React, { useState, useEffect } from "react";
+import { collection, addDoc, query, where, onSnapshot} from "firebase/firestore";
+import { db } from "../firebase/firebaseConfig";
+import { Calendar, momentLocalizer, SlotInfo, Views } from "react-big-calendar";
+import moment from "moment";
+import "moment/locale/es";
+import "react-big-calendar/lib/css/react-big-calendar.css";
+import "./Styles/solicitudes.css";
+import Modal from "./modal";
+import { jsPDF } from "jspdf";
 
-// Define tipos de datos
+import logo from '../img/imglogo.png';
+import firma from '../img/firma.png';
+
+// Configuración para moment.js
+moment.locale("es");
+const localizer = momentLocalizer(moment);
+const fechaEmision = moment().format("DD-MM-YYYY HH:mm:ss");
+const fechaEmisionDate = moment(fechaEmision, "DD-MM-YYYY HH:mm:ss").toDate();
+
 interface FormData {
   nombre: string;
-  apellido: string;
   rut: string;
   direccion: string;
   telefono: string;
   correo: string;
   tipoSolicitud: string;
-  fecha?: string;
-  horaInicio?: string;
-  horaFin?: string;
   datosCertificado?: string;
-  archivoUrl?: string | null; // Se almacenará la referencia del archivo
+  fechaInicio?: Date | null;
+  fechaFin?: Date | null;
+  fechaEmision: Date | null;
+
 }
 
 const Solicitudes: React.FC = () => {
   const [formData, setFormData] = useState<FormData>({
-    nombre: '',
-    apellido: '',
-    rut: '',
-    direccion: '',
-    telefono: '',
-    correo: '',
-    tipoSolicitud: '',
-    fecha: '',
-    horaInicio: '',
-    horaFin: '',
-    datosCertificado: '',
-    archivoUrl: null,
+    nombre: "",
+    rut: "",
+    direccion: "",
+    telefono: "",
+    correo: "",
+    tipoSolicitud: "",
+    datosCertificado: "",
+    fechaInicio: null,
+    fechaFin: null,
+    fechaEmision: fechaEmisionDate,
   });
-  const [archivo, setArchivo] = useState<File | null>(null);
+
+  const [reservasOcupadas, setReservasOcupadas] = useState<any[]>([]);
+  const [selectedSlot, setSelectedSlot] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
-  const today = new Date().toISOString().split('T')[0];
+  const [modalMessage, setModalMessage] = useState("");
 
-  // Validaciones
-  const isRutValid = (rut: string) => /^[0-9]{2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]$/.test(rut);
-  const isOnlyLetters = (value: string) => /^[A-Za-zÀ-ÿ\s]+$/.test(value);
-  const isHorarioValido = (hora: string) => {
-    const [hours, minutes] = hora.split(':').map(Number);
-    return (hours > 10 || (hours === 10 && minutes === 0)) && (hours < 22);
-  };
+  useEffect(() => {
+    const savedData = {
+      nombre: localStorage.getItem("userNombre") || "",
+      rut: localStorage.getItem("userRUT") || "",
+      direccion: localStorage.getItem("userDireccion") || "",
+      telefono: localStorage.getItem("userFono") || "",
+      correo: localStorage.getItem("userCorreo") || "",
+    };
+    setFormData((prev) => ({ ...prev, ...savedData }));
+  }, []);
 
-  // Manejo de cambios en el formulario
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
+  useEffect(() => {
+    if (!formData.tipoSolicitud) return;
 
-  // Reiniciar formulario
+    // Escuchar cambios en tiempo real usando onSnapshot
+    const reservasQuery = query(
+      collection(db, formData.tipoSolicitud),
+      where("tipoSolicitud", "==", formData.tipoSolicitud)
+    );
+
+    const unsubscribe = onSnapshot(reservasQuery, (snapshot) => {
+      const fechasOcupadas = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        
+        // Convertir Timestamp a Date
+        const startDate = data.fechaInicio.toDate();
+        const endDate = data.fechaFin.toDate();
+
+        return {
+          title: "Ocupado",
+          start: startDate,
+          end: endDate,
+        };
+      });
+
+      setReservasOcupadas(fechasOcupadas);
+    });
+
+    return () => unsubscribe();
+  }, [formData.tipoSolicitud]);
+
   const resetForm = () => {
     setFormData({
-      nombre: '',
-      apellido: '',
-      rut: '',
-      direccion: '',
-      telefono: '',
-      correo: '',
-      tipoSolicitud: '',
-      fecha: '',
-      horaInicio: '',
-      horaFin: '',
-      datosCertificado: '',
-      archivoUrl: null,
+      nombre: "",
+      rut: "",
+      direccion: "",
+      telefono: "",
+      correo: "",
+      tipoSolicitud: "",
+      datosCertificado: "",
+      fechaInicio: null,
+      fechaFin: null,
+      fechaEmision: null,
     });
-    setArchivo(null);
+    setSelectedSlot(null);
   };
 
-  // Validación del envío del formulario
+  const handleSelectSlot = (slotInfo: SlotInfo) => {
+    setFormData((prev) => ({
+      ...prev,
+      fechaInicio: slotInfo.start,
+      fechaFin: slotInfo.end,
+    }));
+    setSelectedSlot({
+      title: "Seleccionado",
+      start: slotInfo.start,
+      end: slotInfo.end,
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validar campos
-    if (!isRutValid(formData.rut)) {
-      alert('El RUT ingresado no es válido.');
-      return;
-    }
-
-    if (!isOnlyLetters(formData.nombre) || !isOnlyLetters(formData.apellido)) {
-      alert('El nombre y el apellido deben contener solo letras.');
-      return;
-    }
-
-    if (formData.tipoSolicitud !== 'certificadoResidencia') {
-      if (formData.horaInicio === formData.horaFin) {
-        alert('La hora de inicio y la hora de fin no pueden ser iguales.');
+    if (["cancha", "salas", "plazas"].includes(formData.tipoSolicitud)) {
+      if (!formData.fechaInicio || !formData.fechaFin) {
+        alert("Por favor, selecciona un rango de fecha y hora.");
         return;
       }
 
-      if (formData.horaInicio && formData.horaFin) {
-        const horaInicio = new Date(`1970-01-01T${formData.horaInicio}:00`);
-        const horaFin = new Date(`1970-01-01T${formData.horaFin}:00`);
+      const isOcupado = reservasOcupadas.some((reserva) => {
+        const reservaStart = new Date(reserva.start);
+        const reservaEnd = new Date(reserva.end);
+        return formData.fechaInicio! < reservaEnd && formData.fechaFin! > reservaStart;
+      });
 
-        if (horaInicio >= horaFin) {
-          alert('La hora de fin debe ser posterior a la hora de inicio.');
-          return;
-        }
+      if (isOcupado) {
+        setModalMessage("Esta fecha y hora ya están ocupadas. Seleccione otro rango.");
+        setIsModalOpen(true);
+        return;
+      }
 
-        if (!isHorarioValido(formData.horaInicio) || !isHorarioValido(formData.horaFin)) {
-          alert('La reserva solo puede realizarse entre las 10:00 y las 22:00 horas.');
-          return;
-        }
+      try {
+        await addDoc(collection(db, formData.tipoSolicitud), {
+          ...formData,
+          fechaInicio: new Date(formData.fechaInicio!),
+          fechaFin: new Date(formData.fechaFin!),
+        });
+
+        setModalMessage("Solicitud de reserva enviada correctamente.");
+        setIsModalOpen(true);
+
+        setReservasOcupadas((prev) => [
+          ...prev,
+          { title: "Ocupado", start: formData.fechaInicio, end: formData.fechaFin },
+        ]);
+      } catch (error) {
+        setModalMessage("Error al enviar la solicitud. Intente nuevamente.");
+        setIsModalOpen(true);
+      }
+    } else {
+      // Para certificado de residencia, agregar los campos extra
+      if (formData.tipoSolicitud === "certificadoResidencia") {
+        const pdfData = {
+          ...formData,
+          nombre: localStorage.getItem("userNombre"),
+          rut: localStorage.getItem("userRUT"),
+          direccion: localStorage.getItem("userDireccion"),
+          correo: localStorage.getItem("userCorreo"),
+        };
+
+        // Aquí deberías generar el PDF con los datos
+        // Ejemplo de cómo agregar al PDF (utilizando alguna librería como jsPDF):
+        
+        const pdf = new jsPDF();
+        const logoWidth = 40;  // Ajusta el tamaño del logo
+        const logoHeight = 30; // Ajusta el tamaño del logo
+        const xPosition = 165; // Ajusta la posición en el eje X (donde se coloca a la derecha)
+        const yPosition = 5;  // Ajusta la posición en el eje Y (cerca de la parte superior)
+        const firmaWidth = 40;
+        const firmaHeight = 20;
+        const xFirmaPosition = 10;  // Ajusta la posición en el eje X
+        const yFirmaPosition = 160; // Ajusta la posición en el eje Y
+        pdf.addImage(logo, 'PNG', xPosition, yPosition, logoWidth, logoHeight);
+        pdf.setFont("helvetica", "bold");
+        pdf.text("Certificado de Residencia Villa Los Lagos", pdf.internal.pageSize.width / 2, 20, { align: 'center' });
+        pdf.setFont("helvetica", "normal");
+        pdf.text(`El Señor o la Señora: ${pdfData.nombre}`, 10, 40);
+        pdf.text(`De número de Cédula de Identidad: ${pdfData.rut}`, 10, 50);
+        pdf.text(`Domiciliado en: ${pdfData.direccion}`, 10, 60);
+        pdf.text(`Correo: ${pdfData.correo}`, 10, 70);
+        pdf.text(`Con Motivo de: ${formData.datosCertificado}`, 10, 80);
+        pdf.text(`Fecha de Emisión: ${fechaEmision}`, 10, 90);
+
+        pdf.text("Firma de la Junta de Vecinos", 10, 120);
+        pdf.text("_____________________________", 10, 130);
+        pdf.text("Nombre: Jesús Navarro", 10, 140);
+        pdf.text("Cargo: Presidente JJVV Villa Los Lagos", 10, 150);
+        pdf.addImage(firma, 'PNG', xFirmaPosition, yFirmaPosition, firmaWidth, firmaHeight);
+        pdf.save("certificado_residencia.pdf");
+        // Firma como imagen
+
+
+      }
+
+      try {
+        await addDoc(collection(db, "solicitudes"), formData);
+        setModalMessage("Solicitud enviada correctamente.");
+        setIsModalOpen(true);
+      } catch (error) {
+        setModalMessage("Error al enviar la solicitud. Intente nuevamente.");
+        setIsModalOpen(true);
       }
     }
 
-    // Preparar datos para envío
-    const data: FormData = {
-      ...formData,
-      telefono: `+56${formData.telefono}`,
-      archivoUrl: null, // Inicialmente null
-    };
+    resetForm();
+  };
 
-    try {
-      // Subir archivo si se ha seleccionado
-      if (archivo) {
-        const storage = getStorage();
-        const uniqueFileName = `${Date.now()}_${archivo.name}`; // Añadir un timestamp único
-        const storageRef = ref(storage, `uploads/${uniqueFileName}`);
-        await uploadBytes(storageRef, archivo);
-        data.archivoUrl = storageRef.fullPath; // Guarda solo la referencia del archivo
-      }
-
-      // Elegir la colección adecuada
-      const collectionName = formData.tipoSolicitud === 'certificadoResidencia' 
-        ? 'certificadoResidencia' 
-        : 'solicitudes';
-
-      await addDoc(collection(db, collectionName), data);
-      setModalMessage('Solicitud enviada. A la brevedad recibirá el mensaje correspondiente.');
-      setIsModalOpen(true);
-      resetForm();
-    } catch (error) {
-      console.error('Error al enviar la solicitud:', error);
-      setModalMessage('Error al enviar la solicitud. Intente nuevamente.');
-      setIsModalOpen(true);
-    }
+  const calendarMessages = {
+    today: "Hoy",
+    previous: "Atrás",
+    next: "Siguiente",
+    month: "Mes",
+    week: "Semana",
+    day: "Día",
+    agenda: "Agenda",
+    date: "Fecha",
+    time: "Hora",
+    event: "Evento",
+    noEventsInRange: "No hay eventos en este rango.",
+    showMore: (total: number) => `+ Ver más (${total})`,
   };
 
   return (
     <div className="container">
       <h1>Solicitudes</h1>
       <form onSubmit={handleSubmit}>
-        <label>Nombres:</label>
-        <input
-          type="text"
-          name="nombre"
-          value={formData.nombre}
-          onChange={handleInputChange}
-          required
-          pattern="^[A-Za-zÀ-ÿ\s]+$"
-          title="El nombre debe contener solo letras."
-        />
-        
-        <label>Apellidos:</label>
-        <input
-          type="text"
-          name="apellido"
-          value={formData.apellido}
-          onChange={handleInputChange}
-          required
-          pattern="^[A-Za-zÀ-ÿ\s]+$"
-          title="El apellido debe contener solo letras."
-        />
-        
-        <label>RUT:</label>
-        <input
-          type="text"
-          name="rut"
-          value={formData.rut}
-          onChange={handleInputChange}
-          required
-          placeholder="12.345.678-X"
-          pattern="^[0-9]{2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]$"
-          title="El RUT debe tener el formato 12.345.678-X y puede terminar en un número o 'k'."
-        />
-        
-        <label>Dirección:</label>
-        <input
-          type="text"
-          name="direccion"
-          value={formData.direccion}
-          onChange={handleInputChange}
-          required
-        />
-        
-        <label>Teléfono:</label>
-        <input
-          type="tel"
-          name="telefono"
-          value={formData.telefono}
-          onChange={handleInputChange}
-          required
-          placeholder="912345678"
-          pattern="[0-9]{9}"
-          maxLength={9}
-          title="El teléfono debe tener 9 dígitos."
-        />
-        
-        <label>Correo Electrónico:</label>
-        <input
-          type="email"
-          name="correo"
-          value={formData.correo}
-          onChange={handleInputChange}
-          required
-        />
-        
         <label>Tipo de Solicitud:</label>
         <select
           name="tipoSolicitud"
           value={formData.tipoSolicitud}
-          onChange={handleInputChange}
+          onChange={(e) => setFormData({ ...formData, tipoSolicitud: e.target.value })}
           required
-          className='centrar-select'
+          className="centrar-select"
         >
-          <option value="" disabled>Seleccione tipo de Solicitud</option>
+          <option value="" disabled>
+            Seleccione tipo de Solicitud
+          </option>
           <option value="cancha">Cancha</option>
           <option value="salas">Salas</option>
           <option value="plazas">Plazas</option>
           <option value="certificadoResidencia">Certificado de Residencia</option>
+          <option value="certificadoActividades">Certificado de Participación de Actividades</option>
         </select>
 
-        {formData.tipoSolicitud !== 'certificadoResidencia' && (
-          <div>
-            <label>Fecha:</label>
-            <input
-              type="date"
-              name="fecha"
-              value={formData.fecha}
-              onChange={handleInputChange}
-              min={today}
-              required
-            />
-            <label>Desde:</label>
-            <input
-              type="time"
-              name="horaInicio"
-              value={formData.horaInicio}
-              onChange={handleInputChange}
-              required
-            />
-            <label>Hasta:</label>
-            <input
-              type="time"
-              name="horaFin"
-              value={formData.horaFin}
-              onChange={handleInputChange}
-              required
-            />
-          </div>
+        {(formData.tipoSolicitud === "cancha" ||
+          formData.tipoSolicitud === "salas" ||
+          formData.tipoSolicitud === "plazas") && (
+          <Calendar
+            selectable
+            localizer={localizer}
+            events={[...reservasOcupadas, ...(selectedSlot ? [selectedSlot] : [])]}
+            startAccessor="start"
+            endAccessor="end"
+            style={{ height: 500, margin: "20px" }}
+            onSelectSlot={handleSelectSlot}
+            defaultView={Views.WEEK}
+            views={[Views.WEEK, Views.DAY]}
+            messages={calendarMessages}
+          />
         )}
 
-        {formData.tipoSolicitud === 'certificadoResidencia' && (
+{(formData.tipoSolicitud === "certificadoResidencia" || formData.tipoSolicitud === "certificadoResidencia") && (
+  <div>
+    <label>Razón:</label>
+    <select
+      name="datosCertificadoRes"
+      value={formData.datosCertificado}
+      onChange={(e) => setFormData({ ...formData, datosCertificado: e.target.value })}
+      required
+    >
+      <option value="" disabled hidden>
+        Seleccione una razón
+      </option>
+      <option value="Fines Particulares">Fines Particulares</option>
+      <option value="Fines Laborales">Fines Laborales</option>
+      <option value="Fines Recreativos">Fines Recreativos</option>
+    </select>
+  </div>
+)}
+
+
+        {(formData.tipoSolicitud === "certificadoActividades" || formData.tipoSolicitud === "certificadoActividades") && (
           <div>
             <label>Razón:</label>
             <select
-              className='centrar-select'
-              name="datosCertificado"
+              name="datosCertificadoAct"
               value={formData.datosCertificado}
-              onChange={handleInputChange}
+              onChange={(e) => setFormData({ ...formData, datosCertificado: e.target.value })}
               required
             >
-              <option value="" disabled hidden>Seleccione una razón</option>
-              <option value="razon1">Para fines particulares</option>
-              <option value="razon2">Para fines especiales</option>
+              <option value="" disabled hidden>
+                Seleccione una razón
+              </option>
+              <option value="Fines Academicos">Fines Academicos</option>
+              <option value="Demostrar Experiencia En Actividades">Demostrar Experiencia En Actividades</option>
+              <option value="Otros">Otros</option>
             </select>
-            <label>Subir Documento:</label>
+          </div>
+        )}
+
+        {(formData.tipoSolicitud === "cancha" ||
+          formData.tipoSolicitud === "salas" ||
+          formData.tipoSolicitud === "plazas") && (
+          <div>
+            <label>Fecha de Inicio:</label>
             <input
-              type="file"
-              accept=".pdf, .doc, .docx"
-              onChange={(e) => e.target.files && setArchivo(e.target.files[0])}
+              type="datetime-local"
+              name="fechaInicio"
+              value={formData.fechaInicio ? moment(formData.fechaInicio).format("YYYY-MM-DDTHH:mm") : ""}
+              onChange={(e) => setFormData({ ...formData, fechaInicio: new Date(e.target.value) })}
               required
-              className='centrar'
+            />
+            <label>Fecha de Fin:</label>
+            <input
+              type="datetime-local"
+              name="fechaFin"
+              value={formData.fechaFin ? moment(formData.fechaFin).format("YYYY-MM-DDTHH:mm") : ""}
+              onChange={(e) => setFormData({ ...formData, fechaFin: new Date(e.target.value) })}
+              required
             />
           </div>
         )}
-        
+
         <button type="submit">Enviar Solicitud</button>
       </form>
-      {isModalOpen && <Modal isOpen={isModalOpen} message={modalMessage} onClose={() => setIsModalOpen(false)} />}
+
+      {isModalOpen && (
+        <Modal isOpen={isModalOpen} message={modalMessage} onClose={() => setIsModalOpen(false)} />
+      )}
     </div>
   );
 };

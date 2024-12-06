@@ -1,5 +1,5 @@
-import React, { ReactNode } from 'react';
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
+import { BrowserRouter as Router, Routes, Route} from 'react-router-dom';
 import Navbar from './Componentes/navbar';
 import FormularioSolicitudes from './Componentes/solicitudes';
 import Home from './Componentes/home';
@@ -7,7 +7,19 @@ import Footer from './Componentes/footer';
 import CrearActividades from './Componentes/crearActividades';
 import Contacto from './Componentes/contacto';
 import Actividades from './Componentes/actividades';
-import Videos from './Componentes/videos'; // Asegúrate de que este componente exista
+import Videos from './Componentes/videos';
+import Register from './Componentes/register';
+import UsersList from './Componentes/usersList';
+import ProtectedRoute from './Componentes/protectedRoute';
+import PendingUsersList from './Componentes/pendingUsersList';
+import NewsComponent from './Componentes/noticias';
+import Chatbot from './Componentes/Chatbot';  // Importa el componente Chatbot
+import Feriados from './Componentes/Feriados';
+import Galeria from './Componentes/Galeria';
+import ListaUsuariosProyectos from './Componentes/ListaUsuariosProyectos';
+import SolicitudesGrafico from './Componentes/grafico';
+import Comprar from './Componentes/Comprar';
+import WebPay from './Componentes/WebPay';
 
 const NotFound: React.FC = () => (
   <div style={{
@@ -33,52 +45,48 @@ const NotFound: React.FC = () => (
         borderRadius: '5px',
         cursor: 'pointer'
       }}
-      onClick={() => window.location.href = '/'}
-    >
-      Go Home
-    </button>
+      onClick={() => window.location.href = '/'}>Go Home</button>
   </div>
 );
 
-type LayoutProps = {
-  children: ReactNode;
-};
-
-const Layout: React.FC<LayoutProps> = ({ children }) => {
-  const location = useLocation();
-  const isNotFoundPage = location.pathname !== '/' && 
-                          location.pathname !== '/solicitudes' && 
-                          location.pathname !== '/actividades' && 
-                          location.pathname !== '/videos' && 
-                          location.pathname !== '/contacto' && 
-                          location.pathname !== '/crearActividades';
-
-  return (
-    <>
-      {!isNotFoundPage && <Navbar />}
-      {children}
-      {!isNotFoundPage && <Footer />}
-    </>
-  );
-}
-
 const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [role, setRole] = useState<string>('vecino');
+
   return (
     <Router>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Home />} />
+      <Navbar isAuthenticated={isAuthenticated} setIsAuthenticated={setIsAuthenticated} role={role} setRole={setRole} />
+
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/contacto" element={<Contacto />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/noticias" element={<NewsComponent />} />
+        <Route path="/feriados" element={<Feriados />} />
+        <Route path="/Galeria" element={<Galeria />} />
+
+        {/* Rutas protegidas */}
+        <Route element={<ProtectedRoute isAuthenticated={isAuthenticated} />}>
           <Route path="/solicitudes" element={<FormularioSolicitudes />} />
           <Route path="/actividades" element={<Actividades />} />
           <Route path="/videos" element={<Videos />} />
           <Route path="/crearActividades" element={<CrearActividades />} />
-          <Route path="/contacto" element={<Contacto />} />
-          {/* Ruta para capturar todas las rutas no existentes */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Layout>
+          <Route path="/usersList" element={<UsersList />} />
+          <Route path="/pending" element={<PendingUsersList />} />
+          <Route path="/lup" element={<ListaUsuariosProyectos />} />
+          <Route path="/grafico" element={<SolicitudesGrafico />} />
+          <Route path="/comprar" element={<Comprar />} />
+          <Route path="/webpay" element={<WebPay />} />
+        </Route>
+
+        {/* Ruta para capturar todas las rutas no existentes */}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+
+      <Chatbot /> {/* Aquí agregas el componente del chatbot flotante */}
+      <Footer />
     </Router>
   );
-}
+};
 
 export default App;
